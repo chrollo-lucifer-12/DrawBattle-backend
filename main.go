@@ -3,10 +3,23 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+func RandomWord4() string {
+	letters := []rune("abcdefghijklmnopqrstuvwxyz")
+	rand.Seed(time.Now().UnixNano())
+
+	word := make([]rune, 4)
+	for i := range word {
+		word[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(word)
+}
 
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
@@ -53,7 +66,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			players[id] = p
 
 			if len(activeGames) == 0 {
-				g := newGame("game")
+				g := newGame(RandomWord4())
 				activeGames[g.slug] = g
 			}
 			assigned := false
@@ -69,7 +82,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if !assigned {
-				g := newGame("game")
+				g := newGame(RandomWord4())
 				activeGames[g.slug] = g
 				g.addPlayer(p)
 			}

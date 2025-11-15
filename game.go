@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -133,22 +134,86 @@ func (g *game) numPlayers() int {
 }
 
 func (g *game) begin() {
+	go func() {
+		for {
 
-	g.mu.Lock()
-	for _, v := range g.players {
-		g.currentPlayer = v
-		break
-	}
-	g.mu.Unlock()
+			g.nextPlayer()
 
-	g.currentWord = "sea"
+			g.mu.Lock()
+			drawer := g.currentPlayer
+			g.currentWord = ""
+			g.mu.Unlock()
 
-	fmt.Println("game started with word:", g.currentWord)
+			if drawer == nil {
+				time.Sleep(1 * time.Second)
+				continue
+			}
+
+			fmt.Println("Turn for", drawer.id)
+
+			drawer.send <- Message{
+				Type: "choose_word",
+			}
+
+			wordChosen := make(chan struct{})
+
+			go func() {
+				for {
+					g.mu.Lock()
+					hasWord := g.currentWord != ""
+					g.mu.Unlock()
+
+					if hasWord {
+						close(wordChosen)
+						return
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
+			}()
+
+			select {
+			case <-wordChosen:
+				fmt.Println("Word chosen:", g.currentWord)
+			case <-time.After(20 * time.Second):
+
+				fmt.Println("Drawer took too long, skipping...")
+				continue
+			}
+
+			time.Sleep(80 * time.Second)
+
+			g.mu.Lock()
+			word := g.currentWord
+			drawer = g.currentPlayer
+			g.mu.Unlock()
+
+			g.broadcastMessage(gameMessage{
+				Message: Message{
+					Type: "reveal_word",
+					Payload: map[string]any{
+						"word": word,
+						"id":   drawer.id,
+					},
+				},
+			})
+
+			time.Sleep(10 * time.Second)
+		}
+	}()
 
 	for {
 		msg := <-g.broadcast
 
 		switch msg.Type {
+
+		case "word":
+			g.mu.Lock()
+			isDrawer := g.currentPlayer != nil && msg.p != nil && msg.p.id == g.currentPlayer.id
+			g.mu.Unlock()
+
+			if isDrawer {
+				g.currentWord = msg.Payload["word"].(string)
+			}
 
 		case "draw":
 
@@ -180,7 +245,15 @@ func (g *game) begin() {
 					},
 				})
 			} else {
-				g.broadcastMessage(msg)
+				g.broadcastMessage(gameMessage{
+					Message: Message{
+						Type: "chat",
+						Payload: map[string]any{
+							"sender":  msg.p.id,
+							"message": raw,
+						},
+					},
+				})
 			}
 
 		default:
@@ -210,4 +283,36 @@ func (g *game) broadcastMessage(msg gameMessage) {
 		}
 	}
 	g.mu.Unlock()
+}
+
+func (g *game) nextPlayer() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if len(g.players) == 0 {
+		g.currentPlayer = nil
+		return
+	}
+
+	playerList := make([]*player, 0, len(g.players))
+	for _, p := range g.players {
+		playerList = append(playerList, p)
+	}
+
+	if g.currentPlayer == nil {
+		g.currentPlayer = playerList[0]
+		return
+	}
+
+	var idx int
+	for i, p := range playerList {
+		if p.id == g.currentPlayer.id {
+			idx = i
+			break
+		}
+	}
+
+	g.currentPlayer = playerList[(idx+1)%len(playerList)]
+
+	fmt.Println("turn ", g.currentPlayer.id)
 }
